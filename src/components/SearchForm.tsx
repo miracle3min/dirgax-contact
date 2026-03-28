@@ -81,32 +81,32 @@ export default function SearchForm() {
     setTagsResult(null);
 
     try {
-      const endpoint =
-        searchType === "profile"
-          ? "/api/getcontact/search"
-          : "/api/getcontact/number-detail";
-
-      const res = await fetch(endpoint, {
+      const res = await fetch("/api/getcontact/search", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           phoneNumber: fullNumber,
-          credentialId,
+          id: credentialId,
+          searchType,
         }),
       });
 
       const data = await res.json();
 
       if (!res.ok) {
-        throw new Error(data.error || "Search failed");
+        if (data.captchaRequired) {
+          toast.error("Captcha required! Go to Dashboard → Captcha Verify");
+          return;
+        }
+        throw new Error(data.message || data.error || "Search failed");
       }
 
       if (searchType === "profile") {
-        setProfileResult(data.result);
+        setProfileResult(data.data);
         toast.success("Profile found!");
       } else {
-        setTagsResult(data.result);
-        toast.success(`Found ${data.result?.tags?.length || 0} tags!`);
+        setTagsResult(data.data);
+        toast.success(`Found ${data.data?.tags?.length || 0} tags!`);
       }
     } catch (err: any) {
       toast.error(err.message || "An error occurred");

@@ -12,20 +12,19 @@ import {
 export async function GET() {
   const user = await validateSession();
   if (!user) {
-    return NextResponse.json({ message: 'Unauthorized' }, { status: 401 });
+    return NextResponse.json({ success: false, message: 'Unauthorized' }, { status: 401 });
   }
 
   try {
     const credentials = await getCredentials(user.id);
     return NextResponse.json({
-      message: 'Success',
-      data: credentials.filter((c) => !c.deleted),
-      usingDatabase: true,
+      success: true,
+      credentials: credentials.filter((c) => !c.deleted),
     });
   } catch (error: unknown) {
     const msg = error instanceof Error ? error.message : 'Unknown error';
     console.error('Error fetching credentials:', msg);
-    return NextResponse.json({ message: 'Failed to fetch credentials', error: msg }, { status: 500 });
+    return NextResponse.json({ success: false, message: 'Failed to fetch credentials' }, { status: 500 });
   }
 }
 
@@ -33,7 +32,7 @@ export async function GET() {
 export async function POST(request: NextRequest) {
   const user = await validateSession();
   if (!user) {
-    return NextResponse.json({ message: 'Unauthorized' }, { status: 401 });
+    return NextResponse.json({ success: false, message: 'Unauthorized' }, { status: 401 });
   }
 
   try {
@@ -41,21 +40,21 @@ export async function POST(request: NextRequest) {
     const { description, finalKey, token, clientDeviceId } = body;
 
     if (!finalKey || !token) {
-      return NextResponse.json({ message: 'finalKey and token are required' }, { status: 400 });
+      return NextResponse.json({ success: false, message: 'finalKey and token are required' }, { status: 400 });
     }
 
-    const newCredential = await addCredential(user.id, {
+    const credential = await addCredential(user.id, {
       description: description || '',
       finalKey,
       token,
       clientDeviceId: clientDeviceId || '',
     });
 
-    return NextResponse.json({ message: 'Credential added successfully', data: newCredential }, { status: 201 });
+    return NextResponse.json({ success: true, credential }, { status: 201 });
   } catch (error: unknown) {
     const msg = error instanceof Error ? error.message : 'Unknown error';
     console.error('Error adding credential:', msg);
-    return NextResponse.json({ message: 'Failed to add credential', error: msg }, { status: 500 });
+    return NextResponse.json({ success: false, message: 'Failed to add credential' }, { status: 500 });
   }
 }
 
@@ -63,7 +62,7 @@ export async function POST(request: NextRequest) {
 export async function PUT(request: NextRequest) {
   const user = await validateSession();
   if (!user) {
-    return NextResponse.json({ message: 'Unauthorized' }, { status: 401 });
+    return NextResponse.json({ success: false, message: 'Unauthorized' }, { status: 401 });
   }
 
   try {
@@ -71,26 +70,26 @@ export async function PUT(request: NextRequest) {
     const { id, description, finalKey, token, clientDeviceId } = body;
 
     if (!id) {
-      return NextResponse.json({ message: 'Credential ID is required' }, { status: 400 });
+      return NextResponse.json({ success: false, message: 'Credential ID is required' }, { status: 400 });
     }
 
     const existing = await getCredentialById(Number(id));
     if (!existing) {
-      return NextResponse.json({ message: 'Credential not found' }, { status: 404 });
+      return NextResponse.json({ success: false, message: 'Credential not found' }, { status: 404 });
     }
 
-    const updated = await updateCredential(Number(id), {
+    const credential = await updateCredential(Number(id), {
       description: description || existing.description,
       finalKey: finalKey || existing.finalKey,
       token: token || existing.token,
       clientDeviceId: clientDeviceId || existing.clientDeviceId,
     });
 
-    return NextResponse.json({ message: 'Credential updated successfully', data: updated });
+    return NextResponse.json({ success: true, credential });
   } catch (error: unknown) {
     const msg = error instanceof Error ? error.message : 'Unknown error';
     console.error('Error updating credential:', msg);
-    return NextResponse.json({ message: 'Failed to update credential', error: msg }, { status: 500 });
+    return NextResponse.json({ success: false, message: 'Failed to update credential' }, { status: 500 });
   }
 }
 
@@ -98,7 +97,7 @@ export async function PUT(request: NextRequest) {
 export async function DELETE(request: NextRequest) {
   const user = await validateSession();
   if (!user) {
-    return NextResponse.json({ message: 'Unauthorized' }, { status: 401 });
+    return NextResponse.json({ success: false, message: 'Unauthorized' }, { status: 401 });
   }
 
   try {
@@ -106,19 +105,19 @@ export async function DELETE(request: NextRequest) {
     const { id } = body;
 
     if (!id) {
-      return NextResponse.json({ message: 'Credential ID is required' }, { status: 400 });
+      return NextResponse.json({ success: false, message: 'Credential ID is required' }, { status: 400 });
     }
 
     const existing = await getCredentialById(Number(id));
     if (!existing) {
-      return NextResponse.json({ message: 'Credential not found' }, { status: 404 });
+      return NextResponse.json({ success: false, message: 'Credential not found' }, { status: 404 });
     }
 
     await deleteCredential(Number(id));
-    return NextResponse.json({ message: 'Credential deleted successfully' });
+    return NextResponse.json({ success: true, message: 'Credential deleted' });
   } catch (error: unknown) {
     const msg = error instanceof Error ? error.message : 'Unknown error';
     console.error('Error deleting credential:', msg);
-    return NextResponse.json({ message: 'Failed to delete credential', error: msg }, { status: 500 });
+    return NextResponse.json({ success: false, message: 'Failed to delete credential' }, { status: 500 });
   }
 }

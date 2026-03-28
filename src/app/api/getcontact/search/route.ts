@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { decryptData } from '@/lib/encrypt';
 import { getCredentialById } from '@/lib/credentials';
 import { callApiSearch, callApiNumberDetail, getcontactDecrypt } from '@/lib/getcontact';
 
@@ -50,19 +49,8 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Decrypt the credential ID
-    let credentialId: string;
-    try {
-      credentialId = decryptData(id);
-    } catch {
-      return NextResponse.json(
-        { message: 'Invalid credential ID' },
-        { status: 400 }
-      );
-    }
-
     // Fetch the credential
-    const credential = await getCredentialById(Number(credentialId));
+    const credential = await getCredentialById(Number(id));
     if (!credential) {
       return NextResponse.json(
         { message: 'Credential not found' },

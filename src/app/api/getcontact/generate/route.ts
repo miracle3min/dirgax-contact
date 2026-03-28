@@ -18,6 +18,7 @@ import {
   callApiVerifykitResult,
   getcontactDecrypt,
 } from '@/lib/getcontact';
+import { config } from '@/lib/config';
 import crypto from 'crypto';
 
 interface SessionData {
@@ -25,17 +26,13 @@ interface SessionData {
   clientDeviceId: string;
   token: string;
   finalKey: string;
-  privateKey: number;
-  vfkToken?: string;
-  validationToken?: string;
   deeplink?: string;
-  verificationCode?: string;
   reference?: string;
-  sessionId?: string;
 }
 
+// BUG FIX: Generate 16 hex chars like PHP does (was UUID format)
 function generateClientDeviceId(): string {
-  return crypto.randomUUID();
+  return crypto.randomBytes(8).toString('hex').toLowerCase();
 }
 
 // Helper to parse API response and optionally decrypt
@@ -95,6 +92,14 @@ async function handlePhase1(request: NextRequest) {
     );
   }
 
+  // Normalize phone number (matching PHP logic)
+  let normalizedPhone = phoneNumber.trim().replace(/[-\s]/g, '');
+  if (normalizedPhone.startsWith('0')) {
+    normalizedPhone = '+62' + normalizedPhone.substring(1);
+  } else if (normalizedPhone.startsWith('62') && !normalizedPhone.startsWith('+')) {
+    normalizedPhone = '+' + normalizedPhone;
+  }
+
   // Generate unique keys and device ID
   const clientDeviceId = generateClientDeviceId();
   const privateKey = await generateClientPrivateKey();
@@ -102,66 +107,128 @@ async function handlePhase1(request: NextRequest) {
 
   // Step 1: Register
   const registerResult = await callApiRegister(publicKey, clientDeviceId);
-  const registerParsed = parseApiResponse(registerResult);
 
-  if (registerResult.httpCode !== 200 && registerResult.httpCode !== 201) {
+  // BUG FIX: PHP expects 201 for register, not 200
+  if (registerResult.httpCode !== 201) {
     return NextResponse.json(
-      { message: 'Registration failed', error: registerParsed.parsed },
+      { message: 'Registration failed', error: JSON.parse(registerResult.body) },
       { status: 400 }
     );
   }
 
-  // Extract server public key and compute final key
-  const serverPublicKey = registerParsed.parsed.data?.serverPublicKey ||
-    registerParsed.parsed.data?.server_public_key || 0;
-  const token = registerParsed.parsed.data?.token || '';
+  const registerParsed = JSON.parse(registerResult.body);
+
+  // BUG FIX: Register returns unencrypted response, token and serverKey are under "result"
+  const token = registerParsed?.result?.token || '';
+  const serverPublicKey = registerParsed?.result?.serverKey || 0;
+
+  if (!token) {
+    return NextResponse.json({ message: 'Invalid token from register' }, { status: 500 });
+  }
+  if (!serverPublicKey) {
+    return NextResponse.json({ message: 'Invalid server key from register' }, { status: 500 });
+  }
+
   const finalKey = await generateFinalKey(privateKey, serverPublicKey);
 
+  if (!finalKey) {
+    return NextResponse.json({ message: 'Invalid final key' }, { status: 500 });
+  }
+
   // Step 2: Init Basic
-  await callApiInitBasic(token, finalKey, clientDeviceId);
+  const initBasicResult = await callApiInitBasic(token, finalKey, clientDeviceId);
+  if (initBasicResult.httpCode !== 201) {
+    return NextResponse.json(
+      { message: 'Init basic failed: ' + initBasicResult.httpCode },
+      { status: 400 }
+    );
+  }
 
   // Step 3: Ad Settings
-  await callApiAdSettings(token, finalKey, clientDeviceId);
+  const adSettingsResult = await callApiAdSettings(token, finalKey, clientDeviceId);
+  if (adSettingsResult.httpCode !== 200) {
+    return NextResponse.json(
+      { message: 'Ad settings failed: ' + adSettingsResult.httpCode },
+      { status: 400 }
+    );
+  }
 
   // Step 4: Init Intro
-  await callApiInitIntro(token, finalKey, clientDeviceId);
+  const initIntroResult = await callApiInitIntro(token, finalKey, clientDeviceId);
+  if (initIntroResult.httpCode !== 201) {
+    return NextResponse.json(
+      { message: 'Init intro failed: ' + initIntroResult.httpCode },
+      { status: 400 }
+    );
+  }
+
+  // BUG FIX: Generate random fullname and email like PHP does (was passing empty strings)
+  const fullname = 'User' + Math.floor(Math.random() * 999000 + 1000);
+  const email = 'user' + Math.floor(Math.random() * 90000000 + 10000000) + '@gmail.com';
 
   // Step 5: Email Validate
-  await callApiEmailCodeValidateStart('', '', token, finalKey, clientDeviceId);
+  const emailResult = await callApiEmailCodeValidateStart(email, fullname, token, finalKey, clientDeviceId);
+  if (emailResult.httpCode !== 200) {
+    return NextResponse.json(
+      { message: 'Email code validate start failed: ' + emailResult.httpCode },
+      { status: 400 }
+    );
+  }
 
   // Step 6: Country
-  await callApiCountry(token, finalKey, clientDeviceId);
+  const countryResult = await callApiCountry(token, finalKey, clientDeviceId);
+  if (countryResult.httpCode !== 200) {
+    return NextResponse.json(
+      { message: 'Country failed: ' + countryResult.httpCode },
+      { status: 400 }
+    );
+  }
 
   // Step 7: Validation Start
   const validationResult = await callApiValidationStart(token, finalKey, clientDeviceId);
-  const validationParsed = parseApiResponse(validationResult, finalKey);
-  const validationToken = validationParsed.parsed.data?.validationToken || '';
+  if (validationResult.httpCode !== 200) {
+    return NextResponse.json(
+      { message: 'Validation start failed: ' + validationResult.httpCode },
+      { status: 400 }
+    );
+  }
 
-  // Step 8: VFK Init
-  const vfkInitResult = await verifykitCallApiInit(phoneNumber, clientDeviceId, finalKey);
-  const vfkInitParsed = parseApiResponse(vfkInitResult, finalKey);
-  const vfkToken = vfkInitParsed.parsed.data?.vfkToken ||
-    vfkInitParsed.parsed.data?.token || '';
+  // BUG FIX: Strip country prefix for outsidePhoneNumber like PHP does
+  let outsidePhoneNumber = normalizedPhone;
+  if (outsidePhoneNumber.startsWith('+62')) {
+    outsidePhoneNumber = outsidePhoneNumber.substring(3);
+  }
+
+  // Step 8: VFK Init — BUG FIX: Use VFK_FINAL_KEY, not getcontact finalKey
+  const vfkInitResult = await verifykitCallApiInit(outsidePhoneNumber, clientDeviceId, config.VFK_FINAL_KEY);
+  if (vfkInitResult.httpCode !== 200) {
+    return NextResponse.json(
+      { message: 'VFK init failed: ' + vfkInitResult.httpCode },
+      { status: 400 }
+    );
+  }
 
   // Step 9: VFK Country
-  await verifykitCallApiCountry(clientDeviceId, finalKey);
+  const vfkCountryResult = await verifykitCallApiCountry(clientDeviceId, config.VFK_FINAL_KEY);
+  if (vfkCountryResult.httpCode !== 200) {
+    return NextResponse.json(
+      { message: 'VFK country failed: ' + vfkCountryResult.httpCode },
+      { status: 400 }
+    );
+  }
 
-  // Encrypt session data for next phase
+  // BUG FIX: Match PHP — only pass the 4 essential fields, not privateKey/vfkToken/etc.
   const sessionData: SessionData = {
-    phoneNumber,
+    phoneNumber: normalizedPhone,
     clientDeviceId,
     token,
     finalKey,
-    privateKey,
-    vfkToken,
-    validationToken,
   };
 
-  const encryptedSession = encryptData(JSON.stringify(sessionData));
+  const encryptedSession = encryptData(sessionData);
 
   return NextResponse.json({
-    message: 'Phase 1 complete. Proceed to phase 2.',
-    phase: 1,
+    message: 'Data processed successfully',
     data: encryptedSession,
   });
 }
@@ -178,61 +245,121 @@ async function handlePhase2(request: NextRequest) {
   }
 
   // Decrypt session data
-  let sessionData: SessionData;
-  try {
-    sessionData = JSON.parse(decryptData(data));
-  } catch {
+  const decryptedData = decryptData(data);
+  if (!decryptedData) {
     return NextResponse.json(
-      { message: 'Invalid or corrupted session data' },
+      { message: 'The form data is invalid. Please fill out and submit the form again from the start.' },
       { status: 400 }
     );
   }
 
+  const sessionData: SessionData = typeof decryptedData === 'string'
+    ? JSON.parse(decryptedData)
+    : decryptedData;
+
   const { phoneNumber, clientDeviceId, token, finalKey } = sessionData;
 
-  // Step 1: VFK Start
+  if (!phoneNumber || !clientDeviceId || !token || !finalKey) {
+    return NextResponse.json(
+      { message: 'The form data is invalid. Please fill out and submit the form again from the start.' },
+      { status: 400 }
+    );
+  }
+
+  // Step 1: VFK Start — BUG FIX: Use VFK_FINAL_KEY
   const vfkStartResult = await verifykitCallApiStart(
     phoneNumber,
     clientDeviceId,
-    finalKey
+    config.VFK_FINAL_KEY
   );
-  const vfkStartParsed = parseApiResponse(vfkStartResult, finalKey);
 
-  // Parse deeplink and reference from response
-  const deeplink = vfkStartParsed.parsed.data?.deeplink ||
-    vfkStartParsed.parsed.data?.url || '';
-  const reference = vfkStartParsed.parsed.data?.reference || '';
+  if (vfkStartResult.httpCode !== 200) {
+    return NextResponse.json(
+      { message: 'VFK start failed: ' + vfkStartResult.httpCode },
+      { status: 400 }
+    );
+  }
+
+  // BUG FIX: VFK response is encrypted with VFK_FINAL_KEY, must decrypt
+  const vfkStartParsed = JSON.parse(vfkStartResult.body);
+  let vfkStartData: any;
+  try {
+    const decryptedVfk = getcontactDecrypt(vfkStartParsed.data, config.VFK_FINAL_KEY);
+    vfkStartData = JSON.parse(decryptedVfk);
+  } catch {
+    return NextResponse.json(
+      { message: 'Failed to decrypt VFK start response' },
+      { status: 500 }
+    );
+  }
+
+  // BUG FIX: Parse deeplink from result.deeplink (matching PHP)
+  const deeplink = vfkStartData?.result?.deeplink || '';
+  if (!deeplink) {
+    return NextResponse.json(
+      { message: 'Invalid deeplink' },
+      { status: 500 }
+    );
+  }
+
+  // BUG FIX: Extract verification code from deeplink matching PHP pattern
+  // PHP: preg_match_all('/\*(.*?)\*/', urldecode($deeplink), $matches)
+  // Then checks for format like eipvB-seNwn-CpnN0-B2nkU
+  const decodedDeeplink = decodeURIComponent(deeplink);
+  const matches = decodedDeeplink.match(/\*(.*?)\*/g);
   let verificationCode = '';
 
-  // Try to extract verification code from deeplink
-  if (deeplink) {
-    const match = deeplink.match(/code[=\/]([a-zA-Z0-9]+)/);
-    if (match) {
-      verificationCode = match[1];
+  if (matches) {
+    for (const match of matches) {
+      const candidate = match.replace(/\*/g, '');
+      if (/^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)+$/.test(candidate)) {
+        verificationCode = candidate;
+        break;
+      }
     }
   }
 
-  // If no code from deeplink, try direct field
   if (!verificationCode) {
-    verificationCode = vfkStartParsed.parsed.data?.verificationCode ||
-      vfkStartParsed.parsed.data?.code || '';
+    return NextResponse.json(
+      { message: 'Verification code not found in deeplink' },
+      { status: 404 }
+    );
   }
 
-  // Step 2: Validation Start again with verification context
-  await callApiValidationStart(token, finalKey, clientDeviceId);
+  // Parse reference
+  const reference = vfkStartData?.result?.reference || '';
+  if (!reference) {
+    return NextResponse.json(
+      { message: 'Invalid reference' },
+      { status: 500 }
+    );
+  }
 
-  // Update session data
-  sessionData.deeplink = deeplink;
-  sessionData.verificationCode = verificationCode;
-  sessionData.reference = reference;
+  // Step 2: Validation Start again
+  const validationResult = await callApiValidationStart(token, finalKey, clientDeviceId);
+  if (validationResult.httpCode !== 200) {
+    return NextResponse.json(
+      { message: 'Validation start failed: ' + validationResult.httpCode },
+      { status: 400 }
+    );
+  }
 
-  const encryptedSession = encryptData(JSON.stringify(sessionData));
+  // BUG FIX: Match PHP — include deeplink and reference in encrypted session
+  const updatedSession: SessionData = {
+    phoneNumber,
+    clientDeviceId,
+    token,
+    finalKey,
+    deeplink,
+    reference,
+  };
+
+  const encryptedSession = encryptData(updatedSession);
 
   return NextResponse.json({
-    message: 'Phase 2 complete. Proceed to phase 3.',
-    phase: 2,
+    message: 'Data processed successfully',
     data: encryptedSession,
-    verificationCode: verificationCode || 'Check your phone for verification',
+    verificationCode,
   });
 }
 
@@ -248,50 +375,108 @@ async function handlePhase3(request: NextRequest) {
   }
 
   // Decrypt session data
-  let sessionData: SessionData;
-  try {
-    sessionData = JSON.parse(decryptData(data));
-  } catch {
+  const decryptedData = decryptData(data);
+  if (!decryptedData) {
     return NextResponse.json(
-      { message: 'Invalid or corrupted session data' },
+      { message: 'The form data is invalid. Please fill out and submit the form again from the start.' },
       { status: 400 }
     );
   }
 
-  const { clientDeviceId, token, finalKey, reference, sessionId } = sessionData;
+  const sessionData: SessionData = typeof decryptedData === 'string'
+    ? JSON.parse(decryptedData)
+    : decryptedData;
 
-  // Step 1: VFK Check
+  const { phoneNumber, clientDeviceId, token, finalKey, reference } = sessionData;
+
+  if (!phoneNumber || !clientDeviceId || !reference || !finalKey || !token) {
+    return NextResponse.json(
+      { message: 'The form data is invalid. Please fill out and submit the form again from the start.' },
+      { status: 400 }
+    );
+  }
+
+  // Step 1: VFK Check — BUG FIX: Use VFK_FINAL_KEY
   const vfkCheckResult = await verifykitCallApiCheck(
-    reference || '',
+    reference,
     clientDeviceId,
-    finalKey
+    config.VFK_FINAL_KEY
   );
-  const vfkCheckParsed = parseApiResponse(vfkCheckResult, finalKey);
 
-  // Extract sessionId from vfk check result
-  const resolvedSessionId = sessionId ||
-    vfkCheckParsed.parsed.data?.sessionId ||
-    vfkCheckParsed.parsed.data?.session_id || '';
+  if (vfkCheckResult.httpCode !== 200) {
+    return NextResponse.json(
+      { message: 'VFK check failed: ' + vfkCheckResult.httpCode },
+      { status: 400 }
+    );
+  }
 
-  // Step 2: VerifyKit Result
+  // BUG FIX: Decrypt VFK response with VFK_FINAL_KEY
+  const vfkCheckParsed = JSON.parse(vfkCheckResult.body);
+  let vfkCheckData: any;
+  try {
+    const decryptedVfk = getcontactDecrypt(vfkCheckParsed.data, config.VFK_FINAL_KEY);
+    vfkCheckData = JSON.parse(decryptedVfk);
+  } catch {
+    return NextResponse.json(
+      { message: 'Failed to decrypt VFK check response' },
+      { status: 500 }
+    );
+  }
+
+  // BUG FIX: Extract sessionId from result.sessionId
+  const sessionId = vfkCheckData?.result?.sessionId || '';
+  if (!sessionId) {
+    return NextResponse.json(
+      { message: 'Invalid session id' },
+      { status: 500 }
+    );
+  }
+
+  // Step 2: VerifyKit Result (getcontact endpoint)
   const verifykitResult = await callApiVerifykitResult(
-    resolvedSessionId,
+    sessionId,
     token,
     finalKey,
     clientDeviceId
   );
-  const verifykitParsed = parseApiResponse(verifykitResult, finalKey);
 
-  // Return final credentials
+  if (verifykitResult.httpCode !== 200) {
+    return NextResponse.json(
+      { message: 'Verifykit result failed: ' + verifykitResult.httpCode },
+      { status: 400 }
+    );
+  }
+
+  // BUG FIX: Decrypt the verifykit-result response with the getcontact finalKey
+  const verifykitParsed = JSON.parse(verifykitResult.body);
+  let verifykitData: any;
+  try {
+    const decryptedResult = getcontactDecrypt(verifykitParsed.data, finalKey);
+    verifykitData = JSON.parse(decryptedResult);
+  } catch {
+    return NextResponse.json(
+      { message: 'Failed to decrypt verifykit result' },
+      { status: 500 }
+    );
+  }
+
+  // BUG FIX: Extract validationDate from result
+  const validationDate = verifykitData?.result?.validationDate || '';
+  if (!validationDate) {
+    return NextResponse.json(
+      { message: 'Invalid validation date' },
+      { status: 500 }
+    );
+  }
+
+  // Return final credentials (matching PHP response format)
   return NextResponse.json({
-    message: 'Credential generation complete!',
-    phase: 3,
-    credentials: {
-      clientDeviceId: sessionData.clientDeviceId,
-      token: sessionData.token,
-      finalKey: sessionData.finalKey,
-      validationDate: new Date().toISOString(),
+    message: 'Data processed successfully',
+    data: {
+      clientDeviceId,
+      token,
+      finalKey,
+      validationDate,
     },
-    result: verifykitParsed.parsed,
   });
 }

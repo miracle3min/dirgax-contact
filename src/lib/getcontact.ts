@@ -64,12 +64,17 @@ function buildHeaders(
     'x-app-version': config.GTC_APP_VERSION,
     'x-client-device-id': clientDeviceId || config.GTC_CLIENT_DEVICE_ID,
     'x-lang': config.GTC_LANG,
-    'x-token': token,
     'x-req-timestamp': timestamp,
-    'x-country-code': config.GTC_COUNTRY_CODE,
+    'x-country-code': 'id',
     'x-encrypted': encrypted ? '1' : '0',
     'x-req-signature': signature,
   };
+
+  // Only add x-token when it's not empty
+  if (token) {
+    headers['x-token'] = token;
+  }
+
   return headers;
 }
 
@@ -110,11 +115,6 @@ async function callGetContactAPI(
     encrypted
   );
 
-  // Remove x-token when empty (e.g. register calls)
-  if (!token) {
-    delete headers['x-token'];
-  }
-
   const response = await fetch(
     `${config.GTC_API_BASE_URL}${endpoint}`,
     {
@@ -150,10 +150,11 @@ export async function callApiSearch(
   finalKey: string,
   clientDeviceId?: string
 ): Promise<ApiResponse> {
+  // BUG FIX: Match PHP reference — include countryCode, source should be "search", no searchSource
   const body = {
+    countryCode: config.GTC_COUNTRY_CODE,
     phoneNumber,
-    source: config.GTC_SOURCE,
-    searchSource: config.GTC_SEARCH_SOURCE,
+    source: 'search',
     token,
   };
   return callGetContactAPI('/v2.8/search', body, finalKey, token, clientDeviceId);
@@ -165,7 +166,13 @@ export async function callApiNumberDetail(
   finalKey: string,
   clientDeviceId?: string
 ): Promise<ApiResponse> {
-  const body = { phoneNumber, token };
+  // BUG FIX: Match PHP reference — include countryCode and source
+  const body = {
+    countryCode: config.GTC_COUNTRY_CODE,
+    phoneNumber,
+    source: 'profile',
+    token,
+  };
   return callGetContactAPI('/v2.8/number-detail', body, finalKey, token, clientDeviceId);
 }
 
@@ -192,7 +199,22 @@ export async function callApiRegister(
   clientPublicKey: number,
   clientDeviceId: string
 ): Promise<ApiResponse> {
-  const body = { clientPublicKey };
+  // BUG FIX: Match PHP reference — include all device/carrier fields
+  const body = {
+    carrierCountryCode: config.GTC_CARRIER_COUNTRY_CODE,
+    carrierName: config.GTC_CARRIER_NAME,
+    carrierNetworkCode: config.GTC_CARRIER_NETWORK_CODE,
+    countryCode: config.GTC_COUNTRY_CODE,
+    deepLink: null,
+    deviceName: config.GTC_DEVICE_NAME,
+    deviceType: config.GTC_DEVICE_TYPE,
+    email: null,
+    notificationToken: '',
+    oldToken: null,
+    peerKey: clientPublicKey,
+    timeZone: config.GTC_TIME_ZONE,
+    token: '',
+  };
   // Register is NOT encrypted and has no token
   return callGetContactAPI(
     '/v2.8/register',
@@ -209,7 +231,17 @@ export async function callApiInitBasic(
   finalKey: string,
   clientDeviceId?: string
 ): Promise<ApiResponse> {
-  const body = { token };
+  // BUG FIX: Match PHP reference — include carrier/device fields
+  const body = {
+    carrierCountryCode: config.GTC_CARRIER_COUNTRY_CODE,
+    carrierName: config.GTC_CARRIER_NAME,
+    carrierNetworkCode: config.GTC_CARRIER_NETWORK_CODE,
+    countryCode: config.GTC_COUNTRY_CODE,
+    deviceName: config.GTC_DEVICE_NAME,
+    notificationToken: '',
+    timeZone: config.GTC_TIME_ZONE,
+    token,
+  };
   return callGetContactAPI('/v2.8/init-basic', body, finalKey, token, clientDeviceId);
 }
 
@@ -218,7 +250,11 @@ export async function callApiAdSettings(
   finalKey: string,
   clientDeviceId?: string
 ): Promise<ApiResponse> {
-  const body = { token };
+  // BUG FIX: Match PHP reference — include source field
+  const body = {
+    source: 'init',
+    token,
+  };
   return callGetContactAPI('/v2.8/ad-settings', body, finalKey, token, clientDeviceId);
 }
 
@@ -227,7 +263,18 @@ export async function callApiInitIntro(
   finalKey: string,
   clientDeviceId?: string
 ): Promise<ApiResponse> {
-  const body = { token };
+  // BUG FIX: Match PHP reference — include carrier/device fields
+  const body = {
+    carrierCountryCode: config.GTC_CARRIER_COUNTRY_CODE,
+    carrierName: config.GTC_CARRIER_NAME,
+    carrierNetworkCode: config.GTC_CARRIER_NETWORK_CODE,
+    countryCode: config.GTC_COUNTRY_CODE,
+    deviceName: config.GTC_DEVICE_NAME,
+    hasRouting: false,
+    notificationToken: '',
+    timeZone: config.GTC_TIME_ZONE,
+    token,
+  };
   return callGetContactAPI('/v2.8/init-intro', body, finalKey, token, clientDeviceId);
 }
 
@@ -238,9 +285,10 @@ export async function callApiEmailCodeValidateStart(
   finalKey: string,
   clientDeviceId?: string
 ): Promise<ApiResponse> {
-  const body = { email, fullname, token };
+  // BUG FIX: Use "fullName" (capital N) to match PHP reference, and fix endpoint path
+  const body = { email, fullName: fullname, token };
   return callGetContactAPI(
-    '/v2.8/email-code-validate-start',
+    '/v2.8/email-code-validate/start', // BUG FIX: was "/v2.8/email-code-validate-start"
     body,
     finalKey,
     token,
@@ -253,7 +301,11 @@ export async function callApiCountry(
   finalKey: string,
   clientDeviceId?: string
 ): Promise<ApiResponse> {
-  const body = { token };
+  // BUG FIX: Match PHP reference — include countryCode (uppercase)
+  const body = {
+    countryCode: config.GTC_COUNTRY_CODE.toUpperCase(),
+    token,
+  };
   return callGetContactAPI('/v2.8/country', body, finalKey, token, clientDeviceId);
 }
 
@@ -262,7 +314,13 @@ export async function callApiValidationStart(
   finalKey: string,
   clientDeviceId?: string
 ): Promise<ApiResponse> {
-  const body = { token };
+  // BUG FIX: Match PHP reference — include app, countryCode, notificationToken
+  const body = {
+    app: 'verifykit',
+    countryCode: config.GTC_COUNTRY_CODE,
+    notificationToken: '',
+    token,
+  };
   return callGetContactAPI('/v2.8/validation-start', body, finalKey, token, clientDeviceId);
 }
 
@@ -288,9 +346,24 @@ export async function callApiProfileSettings(
   finalKey: string,
   clientDeviceId?: string
 ): Promise<ApiResponse> {
-  const body = { privateMode, token };
+  // BUG FIX: Match PHP reference — include all null fields
+  const body = {
+    blockCountrySpam: null,
+    communicationSettings: null,
+    howDoILook: null,
+    landing: null,
+    notificationSettings: null,
+    privateMode,
+    serviceNumber: null,
+    showCommunication: null,
+    showPrivatePopup: null,
+    telegramUsed: null,
+    whatsappUsed: null,
+    whoIsHere: null,
+    token,
+  };
   return callGetContactAPI(
-    '/v2.8/profile-settings',
+    '/v2.8/profile/settings', // BUG FIX: was "/v2.8/profile-settings"
     body,
     finalKey,
     token,
@@ -300,16 +373,30 @@ export async function callApiProfileSettings(
 
 // ---------------------------------------------------------------------------
 // VerifyKit API functions
+// BUG FIX: Complete rewrite to match PHP reference
+// - Use VFK_HMAC_SECRET_KEY for signatures
+// - Use VFK_FINAL_KEY for encryption
+// - Use v2.0 endpoints (was v1.0)
+// - Use correct VFK headers
+// - Send encrypted body like PHP does
 // ---------------------------------------------------------------------------
 
-function buildVFKHeaders(clientDeviceId: string): Record<string, string> {
+function buildVFKHeaders(
+  clientDeviceId: string,
+  timestamp: string,
+  signature: string
+): Record<string, string> {
   return {
     'Content-Type': 'application/json',
-    'X-VFK-App-Key': config.VFK_APP_KEY,
-    'X-VFK-Server-Key': config.VFK_SERVER_KEY,
-    'X-VFK-Client-IP': config.VFK_CLIENT_IP,
-    'X-VFK-Client-Agent': clientDeviceId,
+    'X-VFK-Client-Device-Id': clientDeviceId || config.VFK_CLIENT_DEVICE_ID,
+    'X-VFK-Client-Key': config.VFK_CLIENT_KEY,
+    'X-VFK-Sdk-Version': config.VFK_SDK_VERSION,
+    'X-VFK-Os': config.VFK_OS,
+    'X-VFK-App-Version': config.VFK_APP_VERSION,
+    'X-VFK-Encrypted': '1',
     'X-VFK-Lang': config.VFK_LANG,
+    'X-VFK-Req-Timestamp': timestamp,
+    'X-VFK-Req-Signature': signature,
   };
 }
 
@@ -323,11 +410,27 @@ async function callVFKAPI(
   bodyObj: Record<string, any>,
   clientDeviceId: string
 ): Promise<VFKResponse> {
-  const headers = buildVFKHeaders(clientDeviceId);
+  const bodyJson = JSON.stringify(bodyObj);
+  const timestamp = Date.now().toString();
+
+  // BUG FIX: Use VFK_HMAC_SECRET_KEY for signature (was not signing at all)
+  const signature = getcontactSignature(
+    timestamp,
+    bodyJson,
+    config.VFK_HMAC_SECRET_KEY
+  );
+
+  const headers = buildVFKHeaders(clientDeviceId, timestamp, signature);
+
+  // BUG FIX: VFK calls are encrypted with VFK_FINAL_KEY
+  const encryptedBody = JSON.stringify({
+    data: getcontactEncrypt(bodyJson, config.VFK_FINAL_KEY),
+  });
+
   const response = await fetch(`${config.VFK_API_BASE_URL}${endpoint}`, {
     method: 'POST',
     headers,
-    body: JSON.stringify(bodyObj),
+    body: encryptedBody,
   });
   const responseBody = await response.text();
   return { httpCode: response.status, body: responseBody };
@@ -338,15 +441,32 @@ export async function verifykitCallApiInit(
   clientDeviceId: string,
   _finalKey: string
 ): Promise<VFKResponse> {
-  const body = { outsidePhoneNumber, app: 'getcontact' };
-  return callVFKAPI('/v1.0/init', body, clientDeviceId);
+  // BUG FIX: Match PHP reference — full body with all fields
+  const body = {
+    isCallPermissionGranted: false,
+    countryCode: config.GTC_COUNTRY_CODE,
+    deviceName: 'marlin',
+    installedApps: '{"whatsapp":1,"telegram":0,"viber":0}',
+    outsideCountryCode: config.GTC_OUTSIDE_COUNTRY_CODE,
+    outsidePhoneNumber,
+    timezone: config.GTC_TIME_ZONE,
+    bundleId: config.GTC_BUNDLE_ID,
+  };
+  // BUG FIX: Use v2.0 endpoint (was v1.0)
+  return callVFKAPI('/v2.0/init', body, clientDeviceId);
 }
 
 export async function verifykitCallApiCountry(
   clientDeviceId: string,
   _finalKey: string
 ): Promise<VFKResponse> {
-  return callVFKAPI('/v1.0/country', {}, clientDeviceId);
+  // BUG FIX: Match PHP reference — include countryCode and bundleId
+  const body = {
+    countryCode: config.GTC_COUNTRY_CODE,
+    bundleId: config.GTC_BUNDLE_ID,
+  };
+  // BUG FIX: Use v2.0 endpoint (was v1.0)
+  return callVFKAPI('/v2.0/country', body, clientDeviceId);
 }
 
 export async function verifykitCallApiStart(
@@ -354,8 +474,15 @@ export async function verifykitCallApiStart(
   clientDeviceId: string,
   _finalKey: string
 ): Promise<VFKResponse> {
-  const body = { phoneNumber, countryCode: config.GTC_COUNTRY_CODE };
-  return callVFKAPI('/v1.0/start', body, clientDeviceId);
+  // BUG FIX: Match PHP reference — include countryCode, app, bundleId
+  const body = {
+    countryCode: config.GTC_COUNTRY_CODE,
+    phoneNumber,
+    app: 'whatsapp',
+    bundleId: config.GTC_BUNDLE_ID,
+  };
+  // BUG FIX: Use v2.0 endpoint (was v1.0)
+  return callVFKAPI('/v2.0/start', body, clientDeviceId);
 }
 
 export async function verifykitCallApiCheck(
@@ -363,41 +490,49 @@ export async function verifykitCallApiCheck(
   clientDeviceId: string,
   _finalKey: string
 ): Promise<VFKResponse> {
-  const body = { reference };
-  return callVFKAPI('/v1.0/check', body, clientDeviceId);
+  // BUG FIX: Match PHP reference — include bundleId
+  const body = {
+    reference,
+    bundleId: config.GTC_BUNDLE_ID,
+  };
+  // BUG FIX: Use v2.0 endpoint (was v1.0)
+  return callVFKAPI('/v2.0/check', body, clientDeviceId);
 }
 
 // ---------------------------------------------------------------------------
 // External key generation (naufalist tools API)
+// BUG FIX: URLs and methods completely wrong — fixed to match PHP reference
 // ---------------------------------------------------------------------------
 
 export async function generateClientPrivateKey(): Promise<number> {
-  const res = await fetch(`${config.TOOLS_API_BASE_URL}/getcontact/generate-private-key`);
+  // BUG FIX: Correct URL path (was /getcontact/generate-private-key)
+  const res = await fetch(`${config.TOOLS_API_BASE_URL}/getcontact/api/credentials/private-key`);
   const data = await res.json();
-  return data.privateKey;
+  // BUG FIX: Response field is "data" not "privateKey"
+  return data.data;
 }
 
 export async function generateClientPublicKey(privateKey: number): Promise<number> {
-  const res = await fetch(`${config.TOOLS_API_BASE_URL}/getcontact/generate-public-key`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ privateKey }),
-  });
+  // BUG FIX: Should be GET with query param, not POST with JSON body
+  const res = await fetch(
+    `${config.TOOLS_API_BASE_URL}/getcontact/api/credentials/public-key?privateKey=${privateKey}`
+  );
   const data = await res.json();
-  return data.publicKey;
+  // BUG FIX: Response field is "data" not "publicKey"
+  return data.data;
 }
 
 export async function generateFinalKey(
   privateKey: number,
   serverPublicKey: number
 ): Promise<string> {
-  const res = await fetch(`${config.TOOLS_API_BASE_URL}/getcontact/generate-final-key`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ privateKey, serverPublicKey }),
-  });
+  // BUG FIX: Should be GET with query params, not POST with JSON body
+  const res = await fetch(
+    `${config.TOOLS_API_BASE_URL}/getcontact/api/credentials/final-key?privateKey=${privateKey}&publicKey=${serverPublicKey}`
+  );
   const data = await res.json();
-  return data.finalKey;
+  // BUG FIX: Response field is "data" not "finalKey"
+  return data.data;
 }
 
 // ---------------------------------------------------------------------------

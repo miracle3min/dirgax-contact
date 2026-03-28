@@ -8,7 +8,8 @@ import { config } from './config';
  */
 export function encryptData(input: any): string | false {
   try {
-    const plaintext = JSON.stringify(input);
+    // Match PHP: accept string, number, array/object and JSON encode it
+    const plaintext = typeof input === 'string' ? input : JSON.stringify(input);
 
     // SHA256 hash the secret key to get a consistent 32-byte key
     const key = crypto.createHash('sha256').update(config.FORM_SECRET_KEY).digest();
